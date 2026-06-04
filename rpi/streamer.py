@@ -188,13 +188,18 @@ class Streamer:
         self._load_model()
         self._start_gps()
 
-        cap = cv2.VideoCapture(0)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        from picamera2 import Picamera2
 
-        if not cap.isOpened():
-            log.error('Camera not found')
-            sys.exit(1)
+        picam2 = Picamera2()
+
+        config = picam2.create_preview_configuration(
+            main={"size": (self.width, self.height)}
+        )
+
+        picam2.configure(config)
+        picam2.start()
+
+        log.info(f'Camera open at {self.width}x{self.height}')
 
         log.info(f'Camera open at {self.width}x{self.height}')
 
@@ -205,11 +210,7 @@ class Streamer:
                 retry_delay = 2
 
                 while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        log.warning('Frame read failed — skipping')
-                        time.sleep(0.05)
-                        continue
+                    frame = picam2.capture_array()
 
                     frame, detections = self._run_yolo(frame)
                     self._send_frame(frame)
