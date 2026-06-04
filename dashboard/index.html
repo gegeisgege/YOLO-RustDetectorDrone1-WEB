@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PipeWatch — Drone Inspection HMI</title>
+<link rel="stylesheet" href="style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      PipeWatch
+    </div>
+    <span class="topbar-sub">Pipeline Inspection HMI — ITS Marine Engineering</span>
+  </div>
+  <div class="topbar-right">
+    <div class="status-chip" id="conn-status">
+      <span class="status-dot"></span>
+      <span id="conn-label">Disconnected</span>
+    </div>
+    <button class="btn-icon" id="btn-theme" title="Toggle theme">
+  <svg id="theme-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+</button>
+    <div class="topbar-time" id="clock">--:--:--</div>
+  </div>
+</header>
+
+<main class="grid">
+
+  <section class="panel panel-feed">
+    <div class="panel-header">
+      <span class="panel-title">Drone Feed</span>
+      <div class="panel-controls">
+        <button class="btn-icon" id="btn-snapshot" title="Snapshot">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="12" cy="12" r="4"/><path d="M9 5V3h6v2"/></svg>
+        </button>
+        <button class="btn-icon" id="btn-record" title="Record">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="feed-wrap">
+      <img id="drone-feed" src="" alt="Drone feed" onerror="this.style.display='none'">
+      <canvas id="overlay-canvas"></canvas>
+      <div class="feed-placeholder" id="feed-placeholder">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M12 2L2 7l10 5 10-5-10-5M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        <p>No stream connected</p>
+        <p class="muted">Configure server URL in settings</p>
+      </div>
+      <div class="feed-overlay-bar">
+        <span class="feed-tag" id="feed-fps">-- fps</span>
+        <span class="feed-tag" id="feed-res">-- × --</span>
+        <span class="feed-tag yolo-tag">YOLOv12n</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel panel-gps">
+    <div class="panel-header">
+      <span class="panel-title">GPS Map</span>
+      <div class="panel-controls">
+        <button class="btn-icon" id="btn-center" title="Center on drone">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1" fill="currentColor"/><line x1="12" y1="3" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="21"/><line x1="3" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="21" y2="12"/></svg>
+        </button>
+        <button class="btn-icon" id="btn-clear-markers" title="Clear markers">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="map"></div>
+    <div class="gps-bar">
+      <div class="gps-coord">
+        <span class="coord-label">LAT</span>
+        <span class="coord-val" id="gps-lat">---.------</span>
+      </div>
+      <div class="gps-coord">
+        <span class="coord-label">LON</span>
+        <span class="coord-val" id="gps-lon">---.------</span>
+      </div>
+      <div class="gps-coord">
+        <span class="coord-label">SAT</span>
+        <span class="coord-val" id="gps-sat">--</span>
+      </div>
+      <div class="gps-coord">
+        <span class="coord-label">ALT</span>
+        <span class="coord-val" id="gps-alt">-- m</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel panel-stats">
+    <div class="panel-header">
+      <span class="panel-title">Session Stats</span>
+      <button class="btn-text" id="btn-reset-stats">Reset</button>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-label">Detections</span>
+        <span class="stat-val" id="stat-total">0</span>
+      </div>
+      <div class="stat-card stat-corr">
+        <span class="stat-label">Corrosion</span>
+        <span class="stat-val" id="stat-corrosion">0</span>
+      </div>
+      <div class="stat-card stat-tpd">
+        <span class="stat-label">TPD</span>
+        <span class="stat-val" id="stat-tpd">0</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Avg Conf.</span>
+        <span class="stat-val" id="stat-conf">--%</span>
+      </div>
+    </div>
+    <div class="confidence-bars">
+      <div class="conf-row">
+        <span class="conf-label">Corrosion</span>
+        <div class="conf-track"><div class="conf-fill conf-fill-corr" id="bar-corr" style="width:0%"></div></div>
+        <span class="conf-pct" id="pct-corr">0%</span>
+      </div>
+      <div class="conf-row">
+        <span class="conf-label">TPD</span>
+        <div class="conf-track"><div class="conf-fill conf-fill-tpd" id="bar-tpd" style="width:0%"></div></div>
+        <span class="conf-pct" id="pct-tpd">0%</span>
+      </div>
+      <div class="conf-row">
+        <span class="conf-label">Normal</span>
+        <div class="conf-track"><div class="conf-fill conf-fill-norm" id="bar-norm" style="width:100%"></div></div>
+        <span class="conf-pct" id="pct-norm">100%</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel panel-log">
+    <div class="panel-header">
+      <span class="panel-title">Detection Log</span>
+      <div class="panel-controls">
+        <button class="btn-icon" id="btn-export" title="Export CSV">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="log-table-wrap">
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Class</th>
+            <th>Conf.</th>
+            <th>Lat</th>
+            <th>Lon</th>
+          </tr>
+        </thead>
+        <tbody id="log-body">
+          <tr class="log-empty"><td colspan="5">No detections yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<div class="settings-drawer" id="settings-drawer">
+  <div class="drawer-header">
+    <span>Settings</span>
+    <button class="btn-icon" id="btn-close-settings">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body">
+    <label class="field-label">Server URL (WebSocket)</label>
+    <input type="text" id="cfg-ws" placeholder="ws://192.168.1.x:3000" class="field-input">
+    <label class="field-label">Stream endpoint</label>
+    <input type="text" id="cfg-stream" placeholder="http://192.168.1.x:8080/stream" class="field-input">
+    <label class="field-label">Confidence threshold</label>
+    <div class="slider-row">
+      <input type="range" min="0" max="100" value="50" id="cfg-threshold" step="1">
+      <span id="cfg-threshold-val">50%</span>
+    </div>
+    <label class="field-label">Map center (default)</label>
+    <div class="input-row">
+      <input type="text" id="cfg-lat" placeholder="Lat e.g. -7.2575" class="field-input">
+      <input type="text" id="cfg-lon" placeholder="Lon e.g. 112.7521" class="field-input">
+    </div>
+    <button class="btn-primary" id="btn-connect">Connect</button>
+    <button class="btn-secondary" id="btn-demo">Load Demo Data</button>
+  </div>
+</div>
+
+<button class="fab" id="btn-settings" title="Settings">
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+</button>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
