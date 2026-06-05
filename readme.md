@@ -30,7 +30,6 @@ YOLO-RustDetectorDrone1-WEB/
 │   └── app.js                  # Dashboard logic (WS, GPS, detection rendering)
 ├── rpi/                        # Raspberry Pi onboard code
 │   ├── streamer.py             # Camera capture + YOLOv12n inference + WS stream
-│   ├── gps_logger.py           # GPS NEO-6M serial read → POST to server
 │   ├── best.pt                 # Trained YOLOv12n weights (not tracked by git)
 │   └── requirements.txt
 ├── server/                     # Node.js relay server
