@@ -226,8 +226,7 @@ class Streamer:
                 log.info('Stopped by user')
                 break
 
-        cap.release()
-        if self.ws:
+            picam2.stop()        if self.ws:
             self.ws.close()
 
 

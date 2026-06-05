@@ -1,2 +1,21 @@
+# Dependencies
 node_modules/
+
+# Environment
 .env
+
+# Model weights (use Git LFS or copy manually to rpi/)
+*.pt
+*.onnx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

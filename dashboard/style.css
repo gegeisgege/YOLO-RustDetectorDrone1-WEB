@@ -31,8 +31,8 @@
 
 [data-theme="night"] {
   --bg: #0d1117;
-  --bg-panel: #0f1620cc;
-  --bg-panel-2: #111827dd;
+  --bg-panel: #0f1620;
+  --bg-panel-2: #111827;
   --border: #1f2937;
   --border-2: #374151;
 
@@ -150,7 +150,11 @@ html, body {
 }
 
 .panel-feed  { grid-area: feed; }
-.panel-gps   { grid-area: gps; }
+.panel-gps {
+  grid-area: gps;
+  overflow: hidden;
+  min-height: 0;
+}
 .panel-log   { grid-area: log; height: 240px; }
 .panel-stats { grid-area: stats; height: 240px; }
 
@@ -271,6 +275,7 @@ html, body {
 #map {
   flex: 1;
   min-height: 0;
+  max-height: calc(100% - 80px);
 }
 
 .gps-bar {
@@ -463,10 +468,11 @@ html, body {
   bottom: 0;
   width: 320px;
   background: var(--bg-panel);
+  isolation: isolate;
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  z-index: 100;
+  z-index: 1000;
   transition: right 0.25s ease;
 }
 
