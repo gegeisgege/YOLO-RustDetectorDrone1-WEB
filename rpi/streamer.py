@@ -1,29 +1,31 @@
 #!/usr/bin/env python3
 """
 rpi/streamer.py
-Captures camera frames, runs YOLOv12n inference, streams MJPEG binary
-frames and GPS+detection JSON to the Node relay server via WebSocket.
+Captures frames from Pi Camera, runs YOLOv12n inference, streams annotated
+MJPEG frames and GPS+detection JSON to the Node relay server via WebSocket.
 
 Usage:
-    python streamer.py --server ws://192.168.1.x:3000/rpi [--model weights/best.pt]
-                       [--gps /dev/ttyUSB0] [--conf 0.45] [--res 640x480]
+    python streamer.py --server ws://192.168.1.x:3000/rpi
+                       [--model best.pt]
+                       [--gps /dev/ttyUSB0]
+                       [--conf 0.45]
+                       [--res 640x480]
+                       [--gps-interval 1.0]
 """
 
 import argparse
 import json
 import logging
-import sys
 import time
 import threading
 from datetime import datetime, timezone
 
 import cv2
-import websocket  # websocket-client
+import websocket
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 log = logging.getLogger('streamer')
 
-# ── YOLO (optional — graceful fallback if ultralytics not installed) ──────────
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
@@ -31,7 +33,6 @@ except ImportError:
     YOLO_AVAILABLE = False
     log.warning('ultralytics not installed — running without detection')
 
-# ── GPS (optional — graceful fallback) ───────────────────────────────────────
 try:
     import serial
     import pynmea2
@@ -40,27 +41,23 @@ except ImportError:
     GPS_AVAILABLE = False
     log.warning('pyserial/pynmea2 not installed — GPS disabled')
 
-# ── Class colours (BGR for cv2) ───────────────────────────────────────────────
 CLASS_COLORS = {
-    'corrosion': (58, 93, 232),   # #e85d3a
-    'tpd':       (0, 165, 240),   # #f0a500
-    'normal':    (126, 184, 46),  # #2eb87e
+    'corrosion': (58,  106, 239),
+    'tpd':       (41,  180, 240),
+    'normal':    (153, 211,  52),
 }
 DEFAULT_COLOR = (200, 200, 200)
+JPEG_QUALITY  = 70
 
-JPEG_QUALITY = 70   # balance between bandwidth and clarity
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GPS reader (runs in its own thread)
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── GPS reader ───────────────────────────────────────────────────────────────
 class GPSReader:
     def __init__(self, port, baud=9600):
         self.port = port
         self.baud = baud
-        self.lat = None
-        self.lon = None
-        self._lock = threading.Lock()
+        self.lat  = None
+        self.lon  = None
+        self._lock   = threading.Lock()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
@@ -71,46 +68,41 @@ class GPSReader:
             return self.lat, self.lon
 
     def _run(self):
-        if not GPS_AVAILABLE:
-            return
         try:
             ser = serial.Serial(self.port, self.baud, timeout=1)
             log.info(f'GPS reading from {self.port}')
             while True:
                 line = ser.readline().decode('ascii', errors='replace').strip()
-                if line.startswith('$GPRMC') or line.startswith('$GNRMC'):
+                if line.startswith(('$GPRMC', '$GNRMC')):
                     try:
                         msg = pynmea2.parse(line)
-                        if msg.status == 'A':   # 'A' = valid fix
+                        if msg.status == 'A':
                             with self._lock:
                                 self.lat = msg.latitude
                                 self.lon = msg.longitude
                     except pynmea2.ParseError:
                         pass
         except Exception as e:
-            log.error(f'GPS error: {e}')
+            log.error(f'GPS thread error: {e}')
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main streamer
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── Streamer ─────────────────────────────────────────────────────────────────
 class Streamer:
     def __init__(self, args):
-        self.server_url = args.server
-        self.model_path = args.model
-        self.conf_thresh = args.conf
-        width, height = args.res.split('x')
-        self.width = int(width)
-        self.height = int(height)
-        self.gps_port = args.gps
+        self.server_url   = args.server
+        self.model_path   = args.model
+        self.conf_thresh  = args.conf
+        self.gps_port     = args.gps
         self.gps_interval = args.gps_interval
+        w, h = args.res.split('x')
+        self.width  = int(w)
+        self.height = int(h)
 
-        self.ws = None
-        self.model = None
-        self.gps = None
+        self.ws            = None
+        self.model         = None
+        self.gps           = None
         self._last_gps_send = 0
 
-    # ── setup ─────────────────────────────────────────────────────────────────
     def _load_model(self):
         if not YOLO_AVAILABLE:
             return
@@ -119,7 +111,6 @@ class Streamer:
             log.info(f'Model loaded: {self.model_path}')
         except Exception as e:
             log.error(f'Model load failed: {e}')
-            self.model = None
 
     def _start_gps(self):
         if self.gps_port and GPS_AVAILABLE:
@@ -132,37 +123,33 @@ class Streamer:
         self.ws.connect(self.server_url)
         log.info('WebSocket connected')
 
-    # ── inference ─────────────────────────────────────────────────────────────
     def _run_yolo(self, frame):
-        """Returns (annotated_frame, detections_list)."""
         if self.model is None:
             return frame, []
 
-        results = self.model(frame, conf=self.conf_thresh, verbose=False)[0]
+        results    = self.model(frame, conf=self.conf_thresh, imgsz=320, verbose=False)[0]
         detections = []
 
         for box in results.boxes:
             cls_id = int(box.cls[0])
-            label = self.model.names.get(cls_id, str(cls_id))
-            conf = float(box.conf[0])
+            label  = self.model.names.get(cls_id, str(cls_id))
+            conf   = float(box.conf[0])
             x1, y1, x2, y2 = map(int, box.xyxy[0])
-            w, h = x2 - x1, y2 - y1
 
             color = CLASS_COLORS.get(label, DEFAULT_COLOR)
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(frame, f'{label} {conf:.2f}',
-                        (x1, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.55, color, 1, cv2.LINE_AA)
+                        (x1, max(y1 - 6, 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
 
             detections.append({
-                'class': label,
+                'class':      label,
                 'confidence': round(conf, 4),
-                'bbox': [x1, y1, w, h],
+                'bbox':       [x1, y1, x2 - x1, y2 - y1],
             })
 
         return frame, detections
 
-    # ── send helpers ──────────────────────────────────────────────────────────
     def _send_frame(self, frame):
         ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         if ok:
@@ -174,79 +161,88 @@ class Streamer:
             return
         self._last_gps_send = now
 
-        lat, lon = (self.gps.position() if self.gps else (None, None))
-        payload = {
-            'lat': lat,
-            'lon': lon,
-            'timestamp': datetime.now(timezone.utc).isoformat(),
+        lat, lon = self.gps.position() if self.gps else (None, None)
+        payload  = {
+            'lat':        lat,
+            'lon':        lon,
+            'timestamp':  datetime.now(timezone.utc).isoformat(),
             'detections': detections,
         }
         self.ws.send(json.dumps(payload))
+        log.info(f'GPS sent: lat={lat}, lon={lon}, detections={len(detections)}')
 
-    # ── main loop ─────────────────────────────────────────────────────────────
     def run(self):
         self._load_model()
         self._start_gps()
 
-        from picamera2 import Picamera2
-
-        picam2 = Picamera2()
-
-        config = picam2.create_preview_configuration(
-            main={"size": (self.width, self.height)}
-        )
-
-        picam2.configure(config)
-        picam2.start()
-
-        log.info(f'Camera open at {self.width}x{self.height}')
-
-        log.info(f'Camera open at {self.width}x{self.height}')
+        try:
+            from picamera2 import Picamera2
+            picam2 = Picamera2()
+            picam2.configure(picam2.create_preview_configuration(
+                main={'size': (self.width, self.height)}
+            ))
+            picam2.start()
+            use_picamera = True
+            log.info(f'Pi Camera started at {self.width}x{self.height}')
+        except Exception as e:
+            log.warning(f'picamera2 not available ({e}), falling back to cv2.VideoCapture')
+            cap = cv2.VideoCapture(0)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self.width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            use_picamera = False
 
         retry_delay = 2
-        while True:
-            try:
-                self._connect_ws()
-                retry_delay = 2
+        try:
+            while True:
+                try:
+                    self._connect_ws()
+                    retry_delay = 2
 
-                while True:
-                    frame = picam2.capture_array()
+                    while True:
+                        if use_picamera:
+                            frame = picam2.capture_array()
+                            # picamera2 returns RGB — convert to BGR for cv2/YOLO
+                            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                        else:
+                            ret, frame = cap.read()
+                            if not ret:
+                                log.warning('Camera read failed')
+                                time.sleep(0.1)
+                                continue
 
-                    frame, detections = self._run_yolo(frame)
-                    self._send_frame(frame)
-                    self._send_gps(detections)
+                        frame, detections = self._run_yolo(frame)
+                        self._send_frame(frame)
+                        self._send_gps(detections)
 
-            except (websocket.WebSocketConnectionClosedException,
-                    ConnectionRefusedError, OSError) as e:
-                log.warning(f'Connection lost ({e}) — retrying in {retry_delay}s')
-                time.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, 30)
+                except (websocket.WebSocketConnectionClosedException,
+                        ConnectionRefusedError, OSError) as e:
+                    log.warning(f'Connection lost ({e}) — retrying in {retry_delay}s')
+                    time.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, 30)
 
-            except KeyboardInterrupt:
-                log.info('Stopped by user')
-                break
-
-            picam2.stop()        if self.ws:
-            self.ws.close()
+        except KeyboardInterrupt:
+            log.info('Stopped by user')
+        finally:
+            if use_picamera:
+                picam2.stop()
+            else:
+                cap.release()
+            if self.ws:
+                self.ws.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
-    p = argparse.ArgumentParser(description='RPi pipeline inspection streamer')
-    p.add_argument('--server', default='ws://localhost:3000/rpi',
-                   help='Relay server WebSocket URL')
-    p.add_argument('--model', default='weights/best.pt',
-                   help='YOLOv12n .pt weights path')
-    p.add_argument('--conf', type=float, default=0.45,
-                   help='Detection confidence threshold')
-    p.add_argument('--res', default='640x480',
-                   help='Camera resolution WxH')
-    p.add_argument('--gps', default=None,
-                   help='GPS serial port, e.g. /dev/ttyUSB0')
+    p = argparse.ArgumentParser()
+    p.add_argument('--server',       default='ws://localhost:3000/rpi')
+    p.add_argument('--model',        default='best.pt')
+    p.add_argument('--conf',         type=float, default=0.45)
+    p.add_argument('--res',          default='640x480')
+    p.add_argument('--gps',          default=None,
+                   help='GPS serial port e.g. /dev/ttyUSB0')
     p.add_argument('--gps-interval', type=float, default=1.0,
                    help='Seconds between GPS+detection JSON sends')
     args = p.parse_args()
-
     Streamer(args).run()
 
 
