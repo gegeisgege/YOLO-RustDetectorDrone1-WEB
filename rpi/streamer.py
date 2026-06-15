@@ -197,11 +197,29 @@ class Streamer:
             from picamera2 import Picamera2
             picam2 = Picamera2()
             picam2.configure(picam2.create_preview_configuration(
-                main={'size': (self.width, self.height), 'format': 'RGB888'}
+                # NOTE: picamera2's "RGB888" format is actually delivered in
+                # BGR byte order on most builds, which is why colors (e.g.
+                # skin tones) came out blue/inverted. Requesting "BGR888"
+                # gives frames already in the order OpenCV/YOLO expect.
+                main={'size': (self.width, self.height), 'format': 'BGR888'}
             ))
             picam2.start()
             use_picamera = True
             log.info(f'Pi Camera started at {self.width}x{self.height}')
+
+            # Enable continuous autofocus if the camera supports it
+            # (Camera Module 3 has an AF motor; older modules don't and
+            # this will just be ignored/log a warning).
+            try:
+                from libcamera import controls
+                picam2.set_controls({
+                    'AfMode':  controls.AfModeEnum.Continuous,
+                    'AfSpeed': controls.AfSpeedEnum.Fast,
+                })
+                log.info('Continuous autofocus enabled')
+            except Exception as e:
+                log.info(f'Autofocus not available ({e}) — skipping')
+
         except Exception as e:
             log.warning(f'picamera2 not available ({e}), falling back to cv2.VideoCapture')
             cap = cv2.VideoCapture(0)
@@ -219,7 +237,7 @@ class Streamer:
                     while True:
                         if use_picamera:
                             frame = picam2.capture_array()
-                            # 'RGB888' format above is already BGR byte order for cv2/YOLO — no conversion needed
+                            # already BGR (see "BGR888" format above) — no conversion needed
                         else:
                             ret, frame = cap.read()
                             if not ret:
