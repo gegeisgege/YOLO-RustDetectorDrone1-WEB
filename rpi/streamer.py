@@ -55,8 +55,10 @@ class GPSReader:
     def __init__(self, port, baud=9600):
         self.port = port
         self.baud = baud
-        self.lat  = None
-        self.lon  = None
+        self.lat        = None
+        self.lon        = None
+        self.altitude   = None
+        self.satellites = None
         self._lock   = threading.Lock()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -65,7 +67,7 @@ class GPSReader:
 
     def position(self):
         with self._lock:
-            return self.lat, self.lon
+            return self.lat, self.lon, self.altitude, self.satellites
 
     def _run(self):
         try:
@@ -81,6 +83,16 @@ class GPSReader:
                                 self.lat = msg.latitude
                                 self.lon = msg.longitude
                     except pynmea2.ParseError:
+                        pass
+                elif line.startswith(('$GPGGA', '$GNGGA')):
+                    try:
+                        msg = pynmea2.parse(line)
+                        with self._lock:
+                            if msg.altitude is not None:
+                                self.altitude = float(msg.altitude)
+                            if msg.num_sats is not None:
+                                self.satellites = int(msg.num_sats)
+                    except (pynmea2.ParseError, ValueError):
                         pass
         except Exception as e:
             log.error(f'GPS thread error: {e}')
@@ -161,15 +173,21 @@ class Streamer:
             return
         self._last_gps_send = now
 
-        lat, lon = self.gps.position() if self.gps else (None, None)
-        payload  = {
+        if self.gps:
+            lat, lon, altitude, satellites = self.gps.position()
+        else:
+            lat, lon, altitude, satellites = None, None, None, None
+
+        payload = {
             'lat':        lat,
             'lon':        lon,
+            'altitude':   altitude,
+            'satellites': satellites,
             'timestamp':  datetime.now(timezone.utc).isoformat(),
             'detections': detections,
         }
         self.ws.send(json.dumps(payload))
-        log.info(f'GPS sent: lat={lat}, lon={lon}, detections={len(detections)}')
+        log.info(f'GPS sent: lat={lat}, lon={lon}, alt={altitude}, sats={satellites}, detections={len(detections)}')
 
     def run(self):
         self._load_model()
@@ -179,7 +197,7 @@ class Streamer:
             from picamera2 import Picamera2
             picam2 = Picamera2()
             picam2.configure(picam2.create_preview_configuration(
-                main={'size': (self.width, self.height)}
+                main={'size': (self.width, self.height), 'format': 'RGB888'}
             ))
             picam2.start()
             use_picamera = True
@@ -201,8 +219,7 @@ class Streamer:
                     while True:
                         if use_picamera:
                             frame = picam2.capture_array()
-                            # picamera2 returns RGB — convert to BGR for cv2/YOLO
-                            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                            # 'RGB888' format above is already BGR byte order for cv2/YOLO — no conversion needed
                         else:
                             ret, frame = cap.read()
                             if not ret:

@@ -10,7 +10,6 @@
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const DEFAULT_WS = `ws://${location.host}`;
-const DEFAULT_STREAM = `http://${location.hostname}:8080/stream`;
 
 const state = {
   ws: null,
@@ -29,7 +28,6 @@ const state = {
   },
   drone: { lat: null, lon: null },
   frameCount: 0,
-  fpsTimer: null,
 };
 
 // ─── Map ──────────────────────────────────────────────────────────────────────
@@ -59,9 +57,24 @@ function setConnected(val) {
   label.textContent = val ? 'Connected' : 'Disconnected';
 }
 
+// ─── Feed elements ────────────────────────────────────────────────────────────
+const feedImg     = document.getElementById('drone-feed');
+const placeholder = document.getElementById('feed-placeholder');
+const fpsEl       = document.getElementById('feed-fps');
+const resEl       = document.getElementById('feed-res');
+
+setInterval(() => {
+  fpsEl.textContent = `${state.frameCount} fps`;
+  state.frameCount = 0;
+}, 1000);
+
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 function connectWS(url) {
-  if (state.ws) { state.ws.close(); state.ws = null; }
+  if (state.ws) {
+    state.ws.onclose = null;
+    state.ws.close();
+    state.ws = null;
+  }
   if (!url) return;
 
   try { state.ws = new WebSocket(url); }
@@ -71,10 +84,24 @@ function connectWS(url) {
   state.ws.onopen  = () => setConnected(true);
   state.ws.onclose = () => {
     setConnected(false);
-    setTimeout(() => { if (state.config.wsUrl) connectWS(state.config.wsUrl); }, 5000);
+    setTimeout(() => {
+      if (state.config.wsUrl && !state.connected) connectWS(state.config.wsUrl);
+    }, 5000);
   };
-  state.ws.onerror = () => state.ws.close();
+  state.ws.onerror = () => { if (state.ws) state.ws.close(); };
   state.ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) {
+      const blob = new Blob([ev.data], { type: 'image/jpeg' });
+      const url  = URL.createObjectURL(blob);
+      const prev = feedImg.src;
+      feedImg.src = url;
+      feedImg.style.display = 'block';
+      placeholder.style.display = 'none';
+      feedImg.onload = () => { resEl.textContent = `${feedImg.naturalWidth} × ${feedImg.naturalHeight}`; };
+      if (prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+      state.frameCount++;
+      return;
+    }
     if (typeof ev.data !== 'string') return;
     try {
       const msg = JSON.parse(ev.data);
@@ -82,34 +109,6 @@ function connectWS(url) {
       if (msg.type === 'detections') handleDetections(msg.detections, msg.lat, msg.lon, msg.timestamp);
     } catch (_) {}
   };
-}
-
-// ─── MJPEG stream ─────────────────────────────────────────────────────────────
-const feedImg    = document.getElementById('drone-feed');
-const placeholder = document.getElementById('feed-placeholder');
-const fpsEl      = document.getElementById('feed-fps');
-const resEl      = document.getElementById('feed-res');
-
-function startStream(url) {
-  if (!url) return;
-  feedImg.style.display = 'block';
-  placeholder.style.display = 'none';
-  feedImg.src = url;
-
-  feedImg.onload = () => {
-    resEl.textContent = `${feedImg.naturalWidth} × ${feedImg.naturalHeight}`;
-    state.frameCount++;
-  };
-  feedImg.onerror = () => {
-    feedImg.style.display = 'none';
-    placeholder.style.display = '';
-  };
-
-  clearInterval(state.fpsTimer);
-  state.fpsTimer = setInterval(() => {
-    fpsEl.textContent = `${state.frameCount} fps`;
-    state.frameCount = 0;
-  }, 1000);
 }
 
 // ─── GPS handler ──────────────────────────────────────────────────────────────
@@ -242,13 +241,12 @@ document.getElementById('btn-close-settings').addEventListener('click', () => {
   drawer.classList.remove('open');
 });
 
-// Populate fields from saved config
 document.getElementById('cfg-ws').value        = state.config.wsUrl;
 document.getElementById('cfg-stream').value    = state.config.streamUrl;
 document.getElementById('cfg-threshold').value = state.config.threshold * 100;
 document.getElementById('cfg-threshold-val').textContent = `${Math.round(state.config.threshold * 100)}%`;
 document.getElementById('cfg-lat').value       = state.config.lat;
-document.getElementById('cfg-lon').value        = state.config.lon;
+document.getElementById('cfg-lon').value       = state.config.lon;
 
 document.getElementById('cfg-threshold').addEventListener('input', e => {
   document.getElementById('cfg-threshold-val').textContent = `${e.target.value}%`;
@@ -270,7 +268,6 @@ document.getElementById('btn-connect').addEventListener('click', () => {
 
   map.setView([lat, lon], 15);
   connectWS(ws);
-  if (stream) startStream(stream);
   drawer.classList.remove('open');
 });
 
@@ -409,4 +406,3 @@ function startPolling(baseUrl) {
 
 // ─── Auto-connect on load ─────────────────────────────────────────────────────
 connectWS(state.config.wsUrl);
-if (state.config.streamUrl) startStream(state.config.streamUrl);
