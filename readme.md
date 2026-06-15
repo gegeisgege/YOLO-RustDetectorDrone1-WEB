@@ -4,7 +4,7 @@ Visual monitoring interface for drone-based pipeline inspection using YOLOv12n w
 
 **Project:** Bachelor Thesis — ME234804  
 **Author:** Krisna Hafara Priyanto (NRP. 5019221142)  
-**Co-Author:** Gerald Mahapranaja Pillian  
+**Co-Author:** Gerald Mahapranaja Pillian  (NRP. 5026201050)
 **Dept:** Marine Engineering, ITS Surabaya  
 **Dept 2:** Information Systems, ITS Surabaya
 
